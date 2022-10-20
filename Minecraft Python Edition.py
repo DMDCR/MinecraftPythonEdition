@@ -1,12 +1,9 @@
-
 from __future__ import division
 
 import sys
 import math
 import random
 import time
-import pyglet
-import pyglet.window
 
 from collections import deque
 from pyglet import image
@@ -14,13 +11,19 @@ from pyglet.gl import *
 from pyglet.graphics import TextureGroup
 from pyglet.window import key, mouse
 
+from noise_gen import NoiseGen
+
 TICKS_PER_SEC = 60
 
 # Size of sectors used to ease block loading.
 SECTOR_SIZE = 16
 
+# Movement variables
 WALKING_SPEED = 5
 FLYING_SPEED = 15
+CROUCH_SPEED = 2
+SPRINT_SPEED = 7
+SPRINT_FOV = SPRINT_SPEED / 2
 
 GRAVITY = 20.0
 MAX_JUMP_HEIGHT = 1.0 # About the height of a block.
@@ -34,7 +37,9 @@ MAX_JUMP_HEIGHT = 1.0 # About the height of a block.
 JUMP_SPEED = math.sqrt(2 * GRAVITY * MAX_JUMP_HEIGHT)
 TERMINAL_VELOCITY = 50
 
+# Player variables
 PLAYER_HEIGHT = 2
+PLAYER_FOV = 80.0
 
 if sys.version_info[0] >= 3:
     xrange = range
@@ -83,6 +88,9 @@ GRASS = tex_coords((1, 0), (0, 1), (0, 0))
 SAND = tex_coords((1, 1), (1, 1), (1, 1))
 BRICK = tex_coords((2, 0), (2, 0), (2, 0))
 STONE = tex_coords((2, 1), (2, 1), (2, 1))
+WOOD = tex_coords((3, 1), (3, 1), (3, 1))
+LEAF = tex_coords((3, 0), (3, 0), (3, 0))
+WATER = tex_coords((0, 2), (0, 2), (0, 2))
 
 FACES = [
     ( 0, 1, 0),
@@ -162,38 +170,48 @@ class Model(object):
         """ Initialize the world by placing all the blocks.
 
         """
-        n = 80  # 1/2 width and height of world
+        gen = NoiseGen(452692)
+
+        n = 128 #size of the world
         s = 1  # step size
         y = 0  # initial y height
-        for x in xrange(-n, n + 1, s):
-            for z in xrange(-n, n + 1, s):
-                # create a layer stone an grass everywhere.
-                self.add_block((x, y - 2, z), GRASS, immediate=False)
-                self.add_block((x, y - 3, z), STONE, immediate=False)
-                if x in (-n, n) or z in (-n, n):
-                    # create outer walls.
-                    for dy in xrange(-2, 3):
-                        self.add_block((x, y + dy, z), STONE, immediate=False)
+        
+        #too lazy to do this properly lol
+        heightMap = []
+        for x in xrange(0, n, s):
+            for z in xrange(0, n, s):
+                heightMap.append(0)
+        for x in xrange(0, n, s):
+            for z in xrange(0, n, s):
+                heightMap[z + x * n] = int(gen.getHeight(x, z))
 
-        # generate the hills randomly
-        o = n - 10
-        for _ in xrange(120):
-            a = random.randint(-o, o)  # x position of the hill
-            b = random.randint(-o, o)  # z position of the hill
-            c = -1  # base of the hill
-            h = random.randint(1, 6)  # height of the hill
-            s = random.randint(4, 8)  # 2 * s is the side length of the hill
-            d = 1  # how quickly to taper off the hills
-            t = random.choice([GRASS, SAND, BRICK])
-            for y in xrange(c, c + h):
-                for x in xrange(a - s, a + s + 1):
-                    for z in xrange(b - s, b + s + 1):
-                        if (x - a) ** 2 + (z - b) ** 2 > (s + 1) ** 2:
-                            continue
-                        if (x - 0) ** 2 + (z - 0) ** 2 < 5 ** 2:
-                            continue
-                        self.add_block((x, y, z), t, immediate=False)
-                s -= d  # decrement side length so hills taper off
+        #Generate the world
+        for x in xrange(0, n, s):
+            for z in xrange(0, n, s):
+                h = heightMap[z + x * n]
+                if (h < 15):
+                    self.add_block((x, h, z), SAND, immediate=False)
+                    for y in range (h, 15):
+                        self.add_block((x, y, z), WATER, immediate=False)
+                    continue
+                if (h < 18):
+                    self.add_block((x, h, z), SAND, immediate=False)
+                self.add_block((x, h, z), GRASS, immediate=False)
+                for y in xrange(h - 1, 0, -1):
+                    self.add_block((x, y, z), STONE, immediate=False)
+                #Maybe add tree at this (x, z)
+                if (h > 20):
+                    if random.randrange(0, 1000) > 990:
+                        treeHeight = random.randrange(5, 7)
+                        #Tree trunk
+                        for y in xrange(h + 1, h + treeHeight):
+                            self.add_block((x, y, z), WOOD, immediate=False)
+                        #Tree leaves
+                        leafh = h + treeHeight
+                        for lz in xrange(z + -2, z + 3):
+                            for lx in xrange(x + -2, x + 3): 
+                                for ly in xrange(3):
+                                    self.add_block((lx, leafh + ly, lz), LEAF, immediate=False)
 
     def hit_test(self, position, vector, max_distance=8):
         """ Line of sight search from current position. If a block is
@@ -422,8 +440,8 @@ class Model(object):
         add_block() or remove_block() was called with immediate=False
 
         """
-        start = time.perf_counter()
-        while self.queue and time.perf_counter() - start < 1.0 / TICKS_PER_SEC:
+        start = time.process_time()
+        while self.queue and time.process_time() - start < 1.0 / TICKS_PER_SEC:
             self._dequeue()
 
     def process_entire_queue(self):
@@ -445,6 +463,24 @@ class Window(pyglet.window.Window):
         # When flying gravity has no effect and speed is increased.
         self.flying = False
 
+        # Used for constant jumping. If the space bar is held down,
+        # this is true, otherwise, it's false
+        self.jumping = False
+
+        # If the player actually jumped, this is true
+        self.jumped = False
+
+        # If this is true, a crouch offset is added to the final glTranslate
+        self.crouch = False
+
+        # Player sprint
+        self.sprinting = False
+
+        # This is an offset value so stuff like speed potions can also be easily added
+        self.fov_offset = 0
+
+        self.collision_types = {"top": False, "bottom": False, "right": False, "left": False}
+
         # Strafing is moving lateral to the direction you are facing,
         # e.g. moving to the left or right while continuing to face forward.
         #
@@ -455,7 +491,7 @@ class Window(pyglet.window.Window):
 
         # Current (x, y, z) position in the world, specified with floats. Note
         # that, perhaps unlike in math class, the y-axis is the vertical axis.
-        self.position = (0, 0, 0)
+        self.position = (30, 50, 80)
 
         # First element is rotation of the player in the x-z plane (ground
         # plane) measured from the z-axis down. The second is the rotation
@@ -475,7 +511,7 @@ class Window(pyglet.window.Window):
         self.dy = 0
 
         # A list of blocks the player can place. Hit num keys to cycle.
-        self.inventory = [BRICK, GRASS, SAND]
+        self.inventory = [BRICK, GRASS, SAND, WOOD, LEAF]
 
         # The current block the user can place. Hit num keys to cycle.
         self.block = self.inventory[0]
@@ -594,7 +630,25 @@ class Window(pyglet.window.Window):
 
         """
         # walking
-        speed = FLYING_SPEED if self.flying else WALKING_SPEED
+        if self.flying:
+            speed = FLYING_SPEED
+        elif self.sprinting:
+            speed = SPRINT_SPEED
+        elif self.crouch:
+            speed = CROUCH_SPEED
+        else:
+            speed = WALKING_SPEED
+
+        if self.jumping:
+            if self.collision_types["top"]:
+                self.dy = JUMP_SPEED
+                self.jumped = True
+        else:
+            if self.collision_types["top"]:
+                self.jumped = False
+        if self.jumped:
+            speed += 0.7
+
         d = dt * speed # distance covered this tick.
         dx, dy, dz = self.get_motion_vector()
         # New position in space, before accounting for gravity.
@@ -608,9 +662,20 @@ class Window(pyglet.window.Window):
             self.dy = max(self.dy, -TERMINAL_VELOCITY)
             dy += self.dy * dt
         # collisions
-        x, y, z = self.position
+        old_pos = self.position
+        x, y, z = old_pos
         x, y, z = self.collide((x + dx, y + dy, z + dz), PLAYER_HEIGHT)
         self.position = (x, y, z)
+
+        # Sptinting stuff. If the player stops moving in the x and z direction, the player stops sprinting
+        # and the sprint fov is subtracted from the fov offset
+        if old_pos[0]-self.position[0] == 0 and old_pos[2]-self.position[2] == 0:
+            disablefov = False
+            if self.sprinting:
+                disablefov = True
+            self.sprinting = False
+            if disablefov:
+                self.fov_offset -= SPRINT_FOV
 
     def collide(self, position, height):
         """ Checks to see if the player at the given `position` and `height`
@@ -636,6 +701,7 @@ class Window(pyglet.window.Window):
         pad = 0.25
         p = list(position)
         np = normalize(position)
+        self.collision_types = {"top":False,"bottom":False,"right":False,"left":False}
         for face in FACES:  # check all surrounding blocks
             for i in xrange(3):  # check each dimension independently
                 if not face[i]:
@@ -651,9 +717,13 @@ class Window(pyglet.window.Window):
                     if tuple(op) not in self.model.world:
                         continue
                     p[i] -= (d - pad) * face[i]
-                    if face == (0, -1, 0) or face == (0, 1, 0):
-                        # You are colliding with the ground or ceiling, so stop
-                        # falling / rising.
+                    # If you are colliding with the ground or ceiling, stop
+                    # falling / rising.
+                    if face == (0, -1, 0):
+                        self.collision_types["top"] = True
+                        self.dy = 0
+                    if face == (0, 1, 0):
+                        self.collision_types["bottom"] = True
                         self.dy = 0
                     break
         return tuple(p)
@@ -729,11 +799,22 @@ class Window(pyglet.window.Window):
             self.strafe[1] -= 1
         elif symbol == key.D:
             self.strafe[1] += 1
+        elif symbol == key.C:
+            self.fov_offset -= 60.0
         elif symbol == key.SPACE:
-            if self.dy == 0:
-                self.dy = JUMP_SPEED
+            self.jumping = True
         elif symbol == key.ESCAPE:
             self.set_exclusive_mouse(False)
+        elif symbol == key.LSHIFT:
+            self.crouch = True
+            if self.sprinting:
+                self.fov_offset -= SPRINT_FOV
+                self.sprinting = False
+        elif symbol == key.R:
+            if not self.crouch:
+                if not self.sprinting:
+                    self.fov_offset += SPRINT_FOV
+                self.sprinting = True
         elif symbol == key.TAB:
             self.flying = not self.flying
         elif symbol in self.num_keys:
@@ -760,6 +841,12 @@ class Window(pyglet.window.Window):
             self.strafe[1] += 1
         elif symbol == key.D:
             self.strafe[1] -= 1
+        elif symbol == key.SPACE:
+            self.jumping = False
+        elif symbol == key.LSHIFT:
+            self.crouch = False
+        elif symbol == key.C:
+            self.fov_offset += 60.0
 
     def on_resize(self, width, height):
         """ Called when the window is resized to a new `width` and `height`.
@@ -800,14 +887,17 @@ class Window(pyglet.window.Window):
         glViewport(0, 0, max(1, viewport[0]), max(1, viewport[1]))
         glMatrixMode(GL_PROJECTION)
         glLoadIdentity()
-        gluPerspective(65.0, width / float(height), 0.1, 60.0)
+        gluPerspective(PLAYER_FOV + self.fov_offset, width / float(height), 0.1, 60.0)
         glMatrixMode(GL_MODELVIEW)
         glLoadIdentity()
         x, y = self.rotation
         glRotatef(x, 0, 1, 0)
         glRotatef(-y, math.cos(math.radians(x)), 0, math.sin(math.radians(x)))
         x, y, z = self.position
-        glTranslatef(-x, -y, -z)
+        if self.crouch:
+            glTranslatef(-x, -y+0.2, -z)
+        else:
+            glTranslatef(-x, -y, -z)
 
     def on_draw(self):
         """ Called by pyglet to draw the canvas.
@@ -870,7 +960,7 @@ def setup_fog():
     glFogi(GL_FOG_MODE, GL_LINEAR)
     # How close and far away fog starts and ends. The closer the start and end,
     # the denser the fog in the fog range.
-    glFogf(GL_FOG_START, 20.0)
+    glFogf(GL_FOG_START, 40.0)
     glFogf(GL_FOG_END, 60.0)
 
 
@@ -893,19 +983,11 @@ def setup():
     setup_fog()
 
 
-
-
-
-
 def main():
-    window = Window(width=800, height=600, caption='Minecraft Python Edition', resizable=True)
+    window = Window(width=1280, height=720, caption='Minecraft Python Edition V0.1.5-alpha-water-trees-rg', resizable=True)
     # Hide the mouse cursor and prevent the mouse from leaving the window.
     window.set_exclusive_mouse(True)
-
     setup()
     pyglet.app.run()
 
-
-if __name__ == '__main__':
-    main()
-
+main()
