@@ -1,4 +1,4 @@
-# Minecraft Python Edition v0.1.6-alpha-water-trees-rg
+# Minecraft Python Edition v0.1.6-alpha-water-trees-rendergerbil
 to create a _texture pack_, you can edit the "**texture.png**" file and put what you want. _the process is similar to the older minecraft java days, before texture packs._
 
 _This version fixed the numbering of the versions, sorry lol_
