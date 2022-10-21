@@ -932,8 +932,9 @@ class Window(pyglet.window.Window):
 
         """
         x, y, z = self.position
-        self.label.text = '%02d (%.2f, %.2f, %.2f) %d / %d' % (
-            pyglet.clock.get_fps(), x, y, z,
+        currentversion = '|v0.1.5-alpha-water-trees-rendergerbil|'
+        fpsnotice = 'FPS:'
+        self.label.text = '{0} {1} {2}'.format(currentversion, fpsnotice, pyglet.clock.get_fps(),
             len(self.model._shown), len(self.model.world))
         self.label.draw()
 
