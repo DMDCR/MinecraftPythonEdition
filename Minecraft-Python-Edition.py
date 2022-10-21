@@ -12,7 +12,8 @@ from pyglet.graphics import TextureGroup
 from pyglet.window import key, mouse
 
 from noise_gen import NoiseGen
-
+currentversion = '|v0.1.6-alpha-water-trees-rendergerbil|'
+currentversionmc = 'Minecraft Python-Edition    v0.1.6-alpha-water-trees-rendergerbil'
 TICKS_PER_SEC = 60
 
 # Size of sectors used to ease block loading.
@@ -932,7 +933,6 @@ class Window(pyglet.window.Window):
 
         """
         x, y, z = self.position
-        currentversion = '|v0.1.6-alpha-water-trees-rendergerbil|'
         fpsnotice = 'FPS:'
         self.label.text = '{0} {1} {2}'.format(currentversion, fpsnotice, pyglet.clock.get_fps(),
             len(self.model._shown), len(self.model.world))
@@ -985,7 +985,7 @@ def setup():
 
 
 def main():
-    window = Window(width=1280, height=720, caption='Minecraft Python Edition V0.1.5-alpha-water-trees-rg', resizable=True)
+    window = Window(width=1280, height=720, caption='{0}'.format(currentversionmc), resizable=True)
     # Hide the mouse cursor and prevent the mouse from leaving the window.
     window.set_exclusive_mouse(True)
     setup()
